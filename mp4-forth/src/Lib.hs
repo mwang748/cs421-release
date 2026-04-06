@@ -98,7 +98,10 @@ liftIntOp _  _        = Nothing
 --- ### `liftCompOp`
 
 liftCompOp :: (Integer -> Integer -> Bool) -> IStack -> Maybe IStack
-liftCompOp = undefined
+liftCompOp op (x:y:xs)
+    | op y x = Just (-1 : xs)
+    | not (op y x) = Just (0 : xs)
+liftCompOp _ _ = Nothing
 
 
 --- The Dictionary
@@ -122,35 +125,39 @@ initCompileOp = [ (":",    Define)
 --- ### Arithmetic Operators
 
 initArith :: Dictionary
-initArith = [ ("+",  Prim $ liftIStackOp $ liftIntOp (+))
-            ]
+initArith = [ ("+",  Prim $ liftIStackOp $ liftIntOp (+)), ("-",  Prim $ liftIStackOp $ liftIntOp (-)), ("*",  Prim $ liftIStackOp $ liftIntOp (*)), ("/",  Prim $ liftIStackOp $ liftIntOp (div))            ]
 
 --- ### Comparison Operators
 
 initComp :: Dictionary
-initComp = []
+initComp = [ (("<"), Prim $ liftIStackOp $ liftCompOp (<)), ((">"), Prim $ liftIStackOp $ liftCompOp (>)), (("<="), Prim $ liftIStackOp $ liftCompOp (<=)),
+            ((">="), Prim $ liftIStackOp $ liftCompOp (>=)), (("="), Prim $ liftIStackOp $ liftCompOp (==)), (("!="), Prim $ liftIStackOp $ liftCompOp (/=))
+            ]
 
 --- ### Stack Manipulations
 
 initIStackOp :: Dictionary
-initIStackOp = [ ("dup",  Prim $ liftIStackOp istackDup)
+initIStackOp = [ ("dup",  Prim $ liftIStackOp istackDup), ("swap", Prim $ liftIStackOp istackSwap)
+                , ("drop", Prim $ liftIStackOp istackDrop), ("rot", Prim $ liftIStackOp istackRot)
                ]
 
-initPrintOp = [ (".",  Prim printPop)
-              ]
+initPrintOp = [ (".",  Prim printPop), (".S", Prim printStack) ]
 
 istackDup :: IStack -> Maybe IStack
 istackDup (i:is) = Just $ i:i:is
 istackDup _      = Nothing
 
 istackSwap :: IStack -> Maybe IStack
-istackSwap = undefined
+istackSwap (x:y:xs) = Just $ y:x:xs
+istackSwap _ = Nothing
 
 istackDrop :: IStack -> Maybe IStack
-istackDrop = undefined
+istackDrop (x:xs) = Just xs
+istackDrop _ = Nothing
 
 istackRot :: IStack -> Maybe IStack
-istackRot = undefined
+istackRot (x:y:z:xs) = Just (z:x:y:xs)
+istackRot _ = Nothing
 
 --- ### Popping the Stack
 
@@ -162,7 +169,7 @@ printPop _ = underflow
 --- ### Printing the Stack
 
 printStack :: ForthState -> ForthState
-printStack (istack, dict, out) = undefined
+printStack (istack, dict, out) = (istack, dict, unwords (map show $ reverse istack) : out)
 
 --- Evaluator
 --- ---------
@@ -213,15 +220,23 @@ cstackNext _ = Nothing
 --- ### Conditionals
 
 cstackIf :: CStack -> Maybe CStack
-cstackIf cstack = undefined
+cstackIf cstack = Just $ ("if", id) : cstack
 
 cstackElse :: CStack -> Maybe CStack
-cstackElse cstack@(("if", _):_) = undefined
+cstackElse (("if", kif):cs) = Just (("else", id) : ("if", kif) : cs)
 cstackElse _ = Nothing
 
 cstackThen :: CStack -> Maybe CStack
-cstackThen (("else", kelse):("if", kif):(c, kold):cstack) = undefined
-cstackThen (("if", kif):(c, kold):cstack) = undefined
+cstackThen (("else", kelse):("if", kif):(c, kold):cstack) 
+    = let knew = (\state -> case state of
+                (i:is, d, o) -> if i /= 0 then kif (is, d, o) else kelse (is, d, o)
+                _            -> underflow) . kold
+    in Just ((c, knew) : cstack)
+cstackThen (("if", kif):(c, kold):cstack) 
+    = let knew = (\state -> case state of
+                (i:is, d, o) -> if i /= 0 then kif (is, d, o) else (is, d, o)
+                _            -> underflow) . kold
+    in Just ((c, knew) : cstack)
 cstackThen _ = Nothing
 
 --- ### Indefinite Loops
@@ -230,7 +245,17 @@ cstackBegin :: CStack -> Maybe CStack
 cstackBegin cstack = Just $ ("begin", id):cstack
 
 cstackUntil :: CStack -> Maybe CStack
-cstackUntil (("begin", kloop):(c, kold):cstack) = undefined
+cstackUntil (("begin", kloop):(c, kold):cstack) = 
+    let 
+        loopTransition state = 
+            case kloop state of
+                -- repeat if False
+                (0:is, d, o) -> loopTransition (is, d, o)
+                -- continue looping if true
+                (i:is, d, o) -> (is, d, o)
+                _            -> underflow
+        knew = loopTransition . kold
+    in Just ((c, knew) : cstack)
 cstackUntil _ = Nothing
 
 
